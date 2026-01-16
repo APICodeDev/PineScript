@@ -1,0 +1,179 @@
+//@version=6
+indicator("MTF Confluencia 2%", overlay=true, max_labels_count=500)
+
+// === Inputs ===
+useMacd = input.bool(true, "Usar MACD")
+useRsi = input.bool(true, "Usar RSI")
+useEmaTrend = input.bool(true, "Usar Tendencia EMA")
+useCandle = input.bool(true, "Usar Patrón de Velas")
+useLiquidity = input.bool(true, "Usar Liquidez/Soporte/Resistencia + Volumen")
+
+minConfirmations = input.int(2, "Confirmaciones mínimas", minval=1)
+minProfitPct = input.float(2.0, "Beneficio mínimo (%)", minval=0.1)
+
+useTf1 = input.bool(true, "Confirmación TF 5")
+useTf2 = input.bool(true, "Confirmación TF 15")
+useTf3 = input.bool(true, "Confirmación TF 60")
+useTf4 = input.bool(true, "Confirmación TF D")
+useTrendStart = input.bool(true, "Exigir inicio de tendencia en TF actual")
+trendStartBars = input.int(3, "Barras desde cruce tendencia", minval=0)
+trendLookback = input.int(20, "Lookback precio extremo (TF actual)", minval=5)
+extremeAtrMult = input.float(0.2, "Margen ATR para extremo", minval=0.05, step=0.05)
+useHtfAlignment = input.bool(true, "Requerir alineación HTF en cascada")
+useHtfCandle = input.bool(true, "Confirmación vela previa en TF mayor")
+htfCandleTf = input.timeframe("60", "TF vela previa")
+useExtreme = input.bool(true, "Requerir precio en extremo")
+
+// === Helpers ===
+emaFastLen = input.int(12, "EMA rápida")
+emaSlowLen = input.int(26, "EMA lenta")
+rsiLen = input.int(14, "RSI longitud")
+macdFast = input.int(12, "MACD rápida")
+macdSlow = input.int(26, "MACD lenta")
+macdSignal = input.int(9, "MACD señal")
+pivotLen = input.int(5, "Pivote SR", minval=2)
+volMult = input.float(1.8, "Multiplicador volumen", minval=1.0, step=0.1)
+
+f_macd_dir(_close) =>
+    [macdLine, signalLine, hist] = ta.macd(_close, macdFast, macdSlow, macdSignal)
+    hist > 0 ? 1 : hist < 0 ? -1 : 0
+
+f_rsi_dir(_close) =>
+    r = ta.rsi(_close, rsiLen)
+    r > 55 ? 1 : r < 45 ? -1 : 0
+
+f_ema_dir(_close) =>
+    fastEma = ta.ema(_close, emaFastLen)
+    slowEma = ta.ema(_close, emaSlowLen)
+    fastEma > slowEma ? 1 : fastEma < slowEma ? -1 : 0
+
+f_trend_start(_close) =>
+    fastEma = ta.ema(_close, emaFastLen)
+    slowEma = ta.ema(_close, emaSlowLen)
+    ta.crossover(fastEma, slowEma) ? 1 : ta.crossunder(fastEma, slowEma) ? -1 : 0
+
+f_trend_dir(_close) =>
+    fastEma = ta.ema(_close, emaFastLen)
+    slowEma = ta.ema(_close, emaSlowLen)
+    fastEma > slowEma ? 1 : fastEma < slowEma ? -1 : 0
+
+f_candle_dir(_open, _high, _low, _close) =>
+    bullEngulf = _close > _open and _open[1] > _close[1] and _close >= _open[1] and _open <= _close[1]
+    bearEngulf = _close < _open and _open[1] < _close[1] and _close <= _open[1] and _open >= _close[1]
+    bullEngulf ? 1 : bearEngulf ? -1 : 0
+
+f_liquidity_dir(_high, _low, _close, _vol) =>
+    atr = ta.atr(14)
+    pivotHigh = ta.pivothigh(_high, pivotLen, pivotLen)
+    pivotLow = ta.pivotlow(_low, pivotLen, pivotLen)
+    resistance = ta.valuewhen(not na(pivotHigh), pivotHigh, 0)
+    support = ta.valuewhen(not na(pivotLow), pivotLow, 0)
+    volSma = ta.sma(_vol, 20)
+    volSpike = _vol > volSma * volMult
+    nearSupport = not na(support) and math.abs(_close - support) <= atr * 0.5
+    nearResistance = not na(resistance) and math.abs(_close - resistance) <= atr * 0.5
+    volSpike and nearSupport ? 1 : volSpike and nearResistance ? -1 : 0
+
+f_direction(_open, _high, _low, _close, _vol) =>
+    longCount = 0
+    shortCount = 0
+    enabled = 0
+    if useMacd
+        d = f_macd_dir(_close)
+        longCount += d == 1 ? 1 : 0
+        shortCount += d == -1 ? 1 : 0
+        enabled += 1
+    if useRsi
+        d = f_rsi_dir(_close)
+        longCount += d == 1 ? 1 : 0
+        shortCount += d == -1 ? 1 : 0
+        enabled += 1
+    if useEmaTrend
+        d = f_ema_dir(_close)
+        longCount += d == 1 ? 1 : 0
+        shortCount += d == -1 ? 1 : 0
+        enabled += 1
+    if useCandle
+        d = f_candle_dir(_open, _high, _low, _close)
+        longCount += d == 1 ? 1 : 0
+        shortCount += d == -1 ? 1 : 0
+        enabled += 1
+    if useLiquidity
+        d = f_liquidity_dir(_high, _low, _close, _vol)
+        longCount += d == 1 ? 1 : 0
+        shortCount += d == -1 ? 1 : 0
+        enabled += 1
+    dir = longCount > shortCount and longCount > 0 ? 1 : shortCount > longCount and shortCount > 0 ? -1 : 0
+    [dir, longCount, shortCount, enabled]
+
+// === Current timeframe signal ===
+[dirNow, longNow, shortNow, enabledNow] = f_direction(open, high, low, close, volume)
+
+// === MTF confirmations ===
+f_mtf_dir(tf) =>
+    [dir, _, _, _] = request.security(syminfo.tickerid, tf, f_direction(open, high, low, close, volume))
+    dir
+
+f_htf_candle_dir(tf) =>
+    request.security(syminfo.tickerid, tf, f_candle_dir(open, high, low, close))[1]
+
+tf5Dir = f_mtf_dir("5")
+tf15Dir = f_mtf_dir("15")
+tf60Dir = f_mtf_dir("60")
+tfDDir = f_mtf_dir("D")
+
+tf5Aligned = not useTf1 or (dirNow != 0 and tf5Dir == dirNow)
+tf15Aligned = not useTf2 or (tf5Dir != 0 and tf15Dir == tf5Dir)
+tf60Aligned = not useTf3 or (tf15Dir != 0 and tf60Dir == tf15Dir)
+tfDAligned = not useTf4 or (tf60Dir != 0 and tfDDir == tf60Dir)
+htfAligned = tf5Aligned and tf15Aligned and tf60Aligned and tfDAligned
+
+htfCandleDir = useHtfCandle ? f_htf_candle_dir(htfCandleTf) : 0
+htfCandleAligned = not useHtfCandle or htfCandleDir == dirNow
+
+// === Support/Resistance levels for profit estimation ===
+pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+resistance = ta.valuewhen(not na(pivotHigh), pivotHigh, 0)
+support = ta.valuewhen(not na(pivotLow), pivotLow, 0)
+
+longProfit = not na(resistance) ? (resistance - close) / close * 100 : 0
+shortProfit = not na(support) ? (close - support) / close * 100 : 0
+
+profitOk = dirNow == 1 ? longProfit >= minProfitPct : dirNow == -1 ? shortProfit >= minProfitPct : false
+
+// === Confirmation logic ===
+confirmations = dirNow == 1 ? longNow : dirNow == -1 ? shortNow : 0
+confirmOk = confirmations >= minConfirmations and confirmations <= enabledNow
+
+trendStartDir = f_trend_start(close)
+trendStartRecent = dirNow == 1 ? ta.barssince(ta.crossover(ta.ema(close, emaFastLen), ta.ema(close, emaSlowLen))) <= trendStartBars :
+    dirNow == -1 ? ta.barssince(ta.crossunder(ta.ema(close, emaFastLen), ta.ema(close, emaSlowLen))) <= trendStartBars : false
+trendStartOk = not useTrendStart or (trendStartDir == dirNow or trendStartRecent)
+
+atr = ta.atr(14)
+nearLow = close <= ta.lowest(low, trendLookback) + atr * extremeAtrMult
+nearHigh = close >= ta.highest(high, trendLookback) - atr * extremeAtrMult
+extremeOk = dirNow == 1 ? nearLow : dirNow == -1 ? nearHigh : false
+extremeOk := not useExtreme or extremeOk
+
+ready = dirNow != 0 and confirmOk and profitOk and (not useHtfAlignment or htfAligned) and htfCandleAligned and trendStartOk and extremeOk
+
+// === Plotting ===
+plot(resistance, "Resistencia", color=color.new(color.red, 0), linewidth=1, style=plot.style_linebr)
+plot(support, "Soporte", color=color.new(color.green, 0), linewidth=1, style=plot.style_linebr)
+
+var label[] entryLabels = array.new<label>()
+if ready
+    labelText = dirNow == 1 ? "LONG" : "SHORT"
+    profitText = dirNow == 1 ? str.tostring(longProfit, "#.##") : str.tostring(shortProfit, "#.##")
+    newLabel = label.new(bar_index, close, labelText + " | Conf: " + str.tostring(confirmations) + " | Obj: " + profitText + "%",
+        style=label.style_label_up, color=dirNow == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor=color.white)
+    array.push(entryLabels, newLabel)
+    if array.size(entryLabels) > 10
+        oldLabel = array.shift(entryLabels)
+        label.delete(oldLabel)
+
+// === Debug plots (optional) ===
+plotchar(dirNow == 1, "Señal Long", "▲", location.belowbar, color=color.new(color.green, 0))
+plotchar(dirNow == -1, "Señal Short", "▼", location.abovebar, color=color.new(color.red, 0))

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Liquidity Heatmap Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="assets/css/styles.css" />
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar glass fade-in">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <h1>Liquidity Heatmap Analyzer</h1>
+        </div>
+
+        <div class="search-wrap">
+          <label for="symbolSearch">Activo</label>
+          <input id="symbolSearch" type="text" placeholder="Ej: BTCUSDT, ETHUSDT..." autocomplete="off" />
+          <ul id="suggestions" class="suggestions hidden"></ul>
+        </div>
+
+        <button id="refreshBtn" class="ghost-btn">Actualizar</button>
+      </header>
+
+      <main class="layout">
+        <section class="chart-panel glass slide-up">
+          <div class="panel-header">
+            <div>
+              <h2 id="chartTitle">BTCUSDT · 24h</h2>
+              <p id="chartSubtitle">Cargando datos...</p>
+            </div>
+            <div id="statusBadge" class="status-badge">Syncing</div>
+          </div>
+
+          <div id="chartContainer" class="chart-container">
+            <canvas id="heatmapCanvas"></canvas>
+            <div id="loadingOverlay" class="loading-overlay">
+              <div class="loader"></div>
+              <p>Calculando mapa de liquidez...</p>
+            </div>
+          </div>
+
+          <div id="targetExplanation" class="target-explanation"></div>
+        </section>
+
+        <aside class="analysis-panel glass slide-up-delay">
+          <h3>Panel de análisis</h3>
+          <div id="analysisGrid" class="analysis-grid"></div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script type="module" src="assets/js/app.js"></script>
+  </body>
+</html>

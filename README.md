@@ -1,10 +1,15 @@
 # Liquidity Heatmap Analyzer (free-data edition)
 
-Aplicación web (frontend puro) para análisis de liquidez aproximada en cripto usando **APIs públicas de Binance** y visualización con **Lightweight Charts**.
+Aplicación web (frontend + proxy PHP opcional) para análisis de liquidez aproximada en cripto usando **APIs públicas gratuitas**.
+
+## ¿Necesita tokens/API keys?
+
+**No.** Esta versión funciona con endpoints públicos de Binance y fallback de Bybit, sin claves privadas.
 
 ## Estructura
 
 - `index.html`
+- `api/proxy.php` (opcional pero recomendado para evitar bloqueos CORS/regionales)
 - `assets/css/styles.css`
 - `assets/js/app.js`
 - `assets/js/chart.js`
@@ -12,9 +17,7 @@ Aplicación web (frontend puro) para análisis de liquidez aproximada en cripto 
 - `assets/js/api.js`
 - `assets/js/ui.js`
 
-## Ejecución local
-
-Opción rápida con PHP embebido:
+## Ejecución local (recomendada)
 
 ```bash
 php -S localhost:8000
@@ -22,7 +25,13 @@ php -S localhost:8000
 
 Luego abre `http://localhost:8000`.
 
-También puedes usar cualquier servidor estático simple.
+> Si abres el `index.html` con `file://`, muchos navegadores bloquean llamadas API y no verás datos.
+
+## Flujo de datos implementado
+
+1. Front intenta `api/proxy.php` (servidor local/hosting PHP).
+2. Si no está disponible, intenta Binance directo en frontend.
+3. Si Binance falla, usa Bybit como fallback.
 
 ## Heurística de zonas de liquidez
 
@@ -47,8 +56,7 @@ Esto genera un **heatmap aproximado** de liquidez potencial (no liquidaciones re
 
 ## Mejoras futuras sugeridas
 
-- Añadir Bybit como fuente redundante/fallback.
-- Integrar WebSocket de Binance para velas y ticker en tiempo real.
+- Integrar WebSocket para actualización tick-level más fluida.
 - Añadir multi-timeframe scoring (5m/15m/1h).
-- Detectar “fair value gaps” e imbalances.
-- Cache opcional vía PHP para reducir rate-limit en hosting compartido.
+- Detectar FVG/imbalances con mayor precisión.
+- Cache ligero en `proxy.php` para reducir rate-limit en hosting compartido.

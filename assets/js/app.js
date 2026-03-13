@@ -147,6 +147,10 @@ function attachEvents() {
 async function bootstrap() {
   initChart(document.getElementById('chartContainer'));
   attachEvents();
+
+  if (window.location.protocol === 'file:') {
+    showToast('Abre la app con servidor local (ej. php -S localhost:8000). file:// suele bloquear APIs.');
+  }
   try {
     state.symbols = await getSymbols();
   } catch (e) {

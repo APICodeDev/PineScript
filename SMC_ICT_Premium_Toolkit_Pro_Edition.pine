@@ -1,0 +1,280 @@
+//@version=6
+indicator("SMC/ICT Premium Toolkit - Pro Edition", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ==========================================
+// SECCIÓN DE INPUTS
+// ==========================================
+
+// --- Configuración de Estructura ---
+grp_struct = "Estructura de Mercado"
+pivot_len  = input.int(5, "Pivot Lookback", minval=1, group=grp_struct, tooltip="Barras a izquierda/derecha para detectar swings")
+show_bos   = input.bool(true, "Mostrar BOS", group=grp_struct)
+show_choch = input.bool(true, "Mostrar CHoCH", group=grp_struct)
+
+// --- Order Blocks (OB) ---
+grp_ob     = "Order Blocks"
+show_ob    = input.bool(true, "Mostrar Order Blocks", group=grp_ob)
+ob_transp  = input.int(85, "Transparencia OB", minval=0, maxval=100, group=grp_ob)
+ob_limit   = input.int(10, "Límite de OBs activos", minval=1, group=grp_ob)
+
+// --- Fair Value Gaps (FVG) ---
+grp_fvg    = "Fair Value Gaps"
+show_fvg   = input.bool(true, "Mostrar FVGs", group=grp_fvg)
+fvg_unmit  = input.bool(true, "Solo FVGs no mitigados", group=grp_fvg)
+fvg_transp = input.int(90, "Transparencia FVG", minval=0, maxval=100, group=grp_fvg)
+
+// --- Liquidez ---
+grp_liq    = "Liquidez (EQH/EQL)"
+show_liq   = input.bool(true, "Marcar EQH/EQL", group=grp_liq)
+liq_thresh = input.float(0.1, "Umbral de Igualdad (%)", minval=0.01, group=grp_liq, tooltip="Máxima diferencia para considerar niveles 'iguales'")
+
+// --- Premium & Discount ---
+grp_pd     = "Zonas Premium/Discount"
+show_pd    = input.bool(true, "Mostrar Zonas P/D", group=grp_pd)
+
+// --- Indicadores de Confirmación ---
+grp_conf   = "Filtros de Confirmación"
+use_rsi    = input.bool(true, "Usar RSI", group=grp_conf)
+use_ema    = input.bool(true, "Usar EMAs (50/200)", group=grp_conf)
+rsi_len    = input.int(14, "RSI Period", group=grp_conf)
+
+// --- Colores ---
+grp_col    = "Configuración Visual"
+bull_col   = input.color(color.new(#00ffbb, 0), "Color Alcista", group=grp_col)
+bear_col   = input.color(color.new(#ff0055, 0), "Color Bajista", group=grp_col)
+liq_col    = input.color(color.new(color.gray, 50), "Color Liquidez", group=grp_col)
+
+// --- Zonas de Trade ---
+grp_trade  = "Visualización de Zonas de Trade"
+show_trade = input.bool(true, "Auto-detectar Setups (OB+FVG+Sweep)", group=grp_trade)
+future_ext = 20
+tp_multiplier = input.float(2.0, "Multiplicador TP (R:R)", minval=1.0, group=grp_trade)
+
+// ==========================================
+// VARIABLES BASE (definidas antes de uso)
+// ==========================================
+
+var float hi_pivot = na
+var float lo_pivot = na
+var int trend = 0 // 1 Bull, -1 Bear
+
+// Variables auxiliares para dibujar niveles de ruptura sin usar pivots ya reseteados
+var float last_break_hi = na
+var float last_break_lo = na
+
+// ==========================================
+// LÓGICA DE ESTRUCTURA (BOS/CHoCH)
+// ==========================================
+
+ph = ta.pivothigh(high, pivot_len, pivot_len)
+pl = ta.pivotlow(low, pivot_len, pivot_len)
+
+if not na(ph)
+    hi_pivot := ph
+if not na(pl)
+    lo_pivot := pl
+
+// Detección de Rompimientos
+bool bos_bull   = false
+bool bos_bear   = false
+bool choch_bull = false
+bool choch_bear = false
+
+if not na(hi_pivot) and close > hi_pivot
+    last_break_hi := hi_pivot
+    if trend == 1
+        bos_bull := true
+    else
+        choch_bull := true
+    trend := 1
+    hi_pivot := na
+
+if not na(lo_pivot) and close < lo_pivot
+    last_break_lo := lo_pivot
+    if trend == -1
+        bos_bear := true
+    else
+        choch_bear := true
+    trend := -1
+    lo_pivot := na
+
+// Visualización de Estructura
+if bos_bull and show_bos and not na(last_break_hi)
+    line.new(bar_index[pivot_len], last_break_hi, bar_index, last_break_hi, color=bull_col, style=line.style_dashed)
+    label.new(bar_index, high, "BOS", style=label.style_none, textcolor=bull_col, size=size.tiny)
+
+if choch_bull and show_choch and not na(last_break_hi)
+    line.new(bar_index[pivot_len], last_break_hi, bar_index, last_break_hi, color=bull_col, width=2)
+    label.new(bar_index, high, "CHoCH", style=label.style_none, textcolor=bull_col, size=size.tiny)
+
+if bos_bear and show_bos and not na(last_break_lo)
+    line.new(bar_index[pivot_len], last_break_lo, bar_index, last_break_lo, color=bear_col, style=line.style_dashed)
+    label.new(bar_index, low, "BOS", style=label.style_none, textcolor=bear_col, size=size.tiny, yloc=yloc.belowbar)
+
+if choch_bear and show_choch and not na(last_break_lo)
+    line.new(bar_index[pivot_len], last_break_lo, bar_index, last_break_lo, color=bear_col, width=2)
+    label.new(bar_index, low, "CHoCH", style=label.style_none, textcolor=bear_col, size=size.tiny, yloc=yloc.belowbar)
+
+// ==========================================
+// ORDER BLOCKS (OB)
+// ==========================================
+
+type OB
+    box b
+    float top
+    float bot
+    bool active
+    int dir // 1 Bull, -1 Bear
+
+var OB[] obs = array.new<OB>()
+
+if (bos_bull or choch_bull) and show_ob
+    int lookback = 1
+    while lookback < 20 and close[lookback] > open[lookback]
+        lookback += 1
+    float ob_t = high[lookback]
+    float ob_b = low[lookback]
+    box b = box.new(bar_index[lookback], ob_t, bar_index, ob_b,
+         bgcolor=color.new(bull_col, ob_transp), border_color=color.new(bull_col, 50),
+         extend=extend.right)
+    obs.push(OB.new(b, ob_t, ob_b, true, 1))
+
+if (bos_bear or choch_bear) and show_ob
+    int lookback = 1
+    while lookback < 20 and close[lookback] < open[lookback]
+        lookback += 1
+    float ob_t = high[lookback]
+    float ob_b = low[lookback]
+    box b = box.new(bar_index[lookback], ob_t, bar_index, ob_b,
+         bgcolor=color.new(bear_col, ob_transp), border_color=color.new(bear_col, 50),
+         extend=extend.right)
+    obs.push(OB.new(b, ob_t, ob_b, true, -1))
+
+// Limitar número de OB activos/guardados
+if obs.size() > ob_limit
+    OB oldest = obs.shift()
+    box.delete(oldest.b)
+
+if obs.size() > 0
+    for i = obs.size() - 1 to 0
+        OB current = obs.get(i)
+        if current.active
+            bool mitigated = (current.dir == 1 and low < current.bot) or (current.dir == -1 and high > current.top)
+            if mitigated
+                current.active := false
+                box.set_extend(current.b, extend.none)
+                box.set_right(current.b, bar_index)
+                box.set_bgcolor(current.b, color.new(color.gray, 95))
+                obs.set(i, current)
+
+// ==========================================
+// FAIR VALUE GAPS (FVG)
+// ==========================================
+
+bool fvg_bull_now = bar_index >= 2 and low > high[2]
+bool fvg_bear_now = bar_index >= 2 and high < low[2]
+
+if show_fvg
+    if fvg_bull_now
+        box.new(bar_index[2], low, bar_index, high[2],
+             bgcolor=color.new(bull_col, fvg_transp), border_color=na)
+    if fvg_bear_now
+        box.new(bar_index[2], high, bar_index, low[2],
+             bgcolor=color.new(bear_col, fvg_transp), border_color=na)
+
+// ==========================================
+// LIQUIDEZ (EQH/EQL)
+// ==========================================
+
+var float[] highs_pool = array.new_float()
+var float[] lows_pool  = array.new_float()
+
+if not na(ph)
+    highs_pool.push(ph)
+if not na(pl)
+    lows_pool.push(pl)
+
+if show_liq and barstate.islast
+    if highs_pool.size() > 1
+        float last_h = highs_pool.get(highs_pool.size() - 1)
+        float prev_h = highs_pool.get(highs_pool.size() - 2)
+        if math.abs(last_h - prev_h) < last_h * (liq_thresh / 100)
+            line.new(bar_index[40], last_h, bar_index, last_h, color=liq_col, style=line.style_dotted, width=2)
+            label.new(bar_index, last_h, "EQH (Liq)", textcolor=liq_col, style=label.style_none, size=size.small)
+
+    if lows_pool.size() > 1
+        float last_l = lows_pool.get(lows_pool.size() - 1)
+        float prev_l = lows_pool.get(lows_pool.size() - 2)
+        if math.abs(last_l - prev_l) < last_l * (liq_thresh / 100)
+            line.new(bar_index[40], last_l, bar_index, last_l, color=liq_col, style=line.style_dotted, width=2)
+            label.new(bar_index, last_l, "EQL (Liq)", textcolor=liq_col, style=label.style_none, size=size.small, yloc=yloc.belowbar)
+
+// ==========================================
+// PREMIUM / DISCOUNT ZONES
+// ==========================================
+
+float range_high = ta.highest(high, 100)
+float range_low  = ta.lowest(low, 100)
+float premium_threshold = range_high - (range_high - range_low) * 0.25
+float discount_threshold = range_low + (range_high - range_low) * 0.25
+
+bgcolor(close > premium_threshold ? color.new(bear_col, 95) : close < discount_threshold ? color.new(bull_col, 95) : na, display=show_pd ? display.all : display.none)
+
+// ==========================================
+// CONFIRMACIONES Y SEÑALES
+// ==========================================
+
+rsi = ta.rsi(close, rsi_len)
+bool touching_bull_ob = false
+if obs.size() > 0
+    for i = 0 to obs.size() - 1
+        OB current = obs.get(i)
+        if current.active and current.dir == 1 and low <= current.top and high >= current.bot
+            touching_bull_ob := true
+
+bool long_signal = touching_bull_ob and (use_rsi ? rsi < 45 : true) and close < discount_threshold
+
+// ==========================================
+// AUTO-SETUPS (OB + FVG + SWEEP)
+// ==========================================
+
+type TradeSetup
+    float entry
+    float tp
+    float sl
+    int start_bar
+
+var TradeSetup[] active_setups = array.new<TradeSetup>()
+
+// Detección de Liquidez Sweeps
+bool bull_sweep = not na(lo_pivot[1]) and low < lo_pivot[1] and close > lo_pivot[1]
+bool bear_sweep = not na(hi_pivot[1]) and high > hi_pivot[1] and close < hi_pivot[1]
+
+// FVG Cercano (últimas 5 barras)
+bool fvg_bull_near = nz(ta.barssince(fvg_bull_now), 100000) < 5
+bool fvg_bear_near = nz(ta.barssince(fvg_bear_now), 100000) < 5
+
+if show_trade and active_setups.size() < 2
+    if long_signal and fvg_bull_near and bull_sweep
+        float sl = ta.lowest(low, 5) - syminfo.mintick * 10
+        float entry = close
+        float tp = entry + (entry - sl) * tp_multiplier
+        active_setups.push(TradeSetup.new(entry, tp, sl, bar_index))
+
+    else if rsi > 55 and close > premium_threshold and fvg_bear_near and bear_sweep
+        float sl = ta.highest(high, 5) + syminfo.mintick * 10
+        float entry = close
+        float tp = entry - (sl - entry) * tp_multiplier
+        active_setups.push(TradeSetup.new(entry, tp, sl, bar_index))
+
+// Dibujar Setups
+if barstate.islast
+    for i = 0 to (active_setups.size() > 0 ? active_setups.size() - 1 : -1)
+        TradeSetup s = active_setups.get(i)
+        float rr = math.abs(s.tp - s.entry) / math.abs(s.entry - s.sl)
+        int box_left = bar_index
+        int box_right = bar_index + future_ext
+        box.new(box_left, s.tp, box_right, s.entry,
+             bgcolor=color.new(color.green, 80), border_color=color.new(color.green, 40), text=str.format("AUTO TP\nR:R {0, number, #.##}", rr), text_size=size.tiny, text_color=color.white)
+        box.new(box_left, s.entry, box_right, s.sl,
+             bgcolor=color.new(color.red, 80), border_color=color.new(color.red, 40), text="AUTO SL", text_size=size.tiny, text_color=color.white)
